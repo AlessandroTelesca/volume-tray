@@ -1,0 +1,10 @@
+{
+  "uuid": "volume-tray@alessandrot",
+  "name": "Volume Tray",
+  "description": "A tray icon for the PulseAudio Volume Control: left click opens it, or closes it while it has the focus; right click offers the sound settings too.",
+  "shell-version": [
+    "50"
+  ],
+  "version": 1,
+  "url": "https://github.com/AlessandroTelesca/volume-tray"
+}
