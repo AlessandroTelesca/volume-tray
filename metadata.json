@@ -1,7 +1,7 @@
 {
   "uuid": "volume-tray@alessandrot",
   "name": "Volume Tray",
-  "description": "A tray icon for the PulseAudio Volume Control: left click opens it, or closes it while it has the focus; right click offers the sound settings too.",
+  "description": "A tray icon for the PulseAudio Volume Control: left click opens it, or closes it while it has the focus; right click shows sliders for the output, the input and each app that plays.",
   "shell-version": [
     "50"
   ],

@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-FileCopyrightText: 2026 AlessandroTelesca */
+
+.volume-tray-menu {
+  min-width: 22em;
+}
+.volume-tray-item {
+  spacing: 10px;
+}
+.volume-tray-column {
+  spacing: 4px;
+}
+.volume-tray-title {
+  font-size: 0.9em;
+}
+.volume-tray-mute {
+  padding: 8px;
+}

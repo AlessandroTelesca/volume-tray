@@ -2,7 +2,8 @@
 
 GNOME Shell extension `volume-tray@alessandrot`. See README.md for what it does. It is built like Homepage Tray
 (`~/GIT/homepage-tray`): a `PanelMenu.Button` added to the status area under an `appindicator-` role, which Dock Tray
-takes into the dock.
+takes into the dock. The sliders in its menu work on the shell's own `Gvc.MixerControl` (`getMixerControl()` in
+the shell's `status/volume.js`).
 
 ## Install
 

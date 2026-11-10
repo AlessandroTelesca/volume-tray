@@ -4,12 +4,16 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
+import Gvc from 'gi://Gvc';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {Slider} from 'resource:///org/gnome/shell/ui/slider.js';
+import {getMixerControl} from 'resource:///org/gnome/shell/ui/status/volume.js';
 
 // The `appindicator-` prefix is what Dock Tray (and anything else that gathers tray icons) takes for a tray icon,
 // so the button goes wherever the other tray icons go.
@@ -33,6 +37,85 @@ function volumeControl() {
     return null;
 }
 
+const LEVELS = ['audio-volume-low-symbolic', 'audio-volume-medium-symbolic', 'audio-volume-high-symbolic'];
+
+/**
+ * One stream in the menu: its name over a slider, beside an icon that mutes it. `kind` is 'output', 'input' or 'app'.
+ * It follows the stream, which other mixers change too.
+ */
+const StreamItem = GObject.registerClass(
+class StreamItem extends PopupMenu.PopupBaseMenuItem {
+    _init(control, stream, kind, title) {
+        // Not activatable: a click on it must not close the menu.
+        super._init({activate: false, hover: false, style_class: 'volume-tray-item'});
+        this._control = control;
+        this._stream = stream;
+        this._kind = kind;
+        this._updating = false;
+
+        this._icon = new St.Icon({style_class: 'popup-menu-icon'});
+        this._mute = new St.Button({
+            child: this._icon,
+            style_class: 'icon-button flat volume-tray-mute',
+            can_focus: true,
+            y_align: Clutter.ActorAlign.CENTER,
+            accessible_name: 'Mute',
+        });
+        this._mute.connect('clicked', () => stream.change_is_muted(!stream.is_muted));
+        this.add_child(this._mute);
+
+        const column = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL,
+            x_expand: true,
+            style_class: 'volume-tray-column',
+        });
+        const label = new St.Label({text: title, style_class: 'volume-tray-title'});
+        label.clutter_text.ellipsize = 3; // Pango.EllipsizeMode.END
+        column.add_child(label);
+        this._slider = new Slider(0);
+        this._slider.accessible_name = title;
+        this._slider.connect('notify::value', () => this._push());
+        column.add_child(this._slider);
+        this.add_child(column);
+
+        stream.connectObject('notify::volume', () => this._sync(), 'notify::is-muted', () => this._sync(), this);
+        this._sync();
+    }
+
+    get _max() {
+        return this._control.get_vol_max_norm();
+    }
+
+    _push() {
+        if (this._updating)
+            return;
+        const stream = this._stream;
+        stream.volume = this._slider.value * this._max;
+        stream.push_volume();
+        // Moving a muted stream's slider up is asking to hear it.
+        if (stream.is_muted && this._slider.value > 0)
+            stream.change_is_muted(false);
+    }
+
+    _sync() {
+        const stream = this._stream;
+        const level = Math.min(stream.volume / this._max, 1);
+        this._updating = true;
+        this._slider.value = level;
+        this._updating = false;
+        const silent = stream.is_muted || level === 0;
+        if (this._kind === 'input') {
+            this._icon.icon_name = silent ? 'microphone-sensitivity-muted-symbolic' : 'audio-input-microphone-symbolic';
+        } else if (silent) {
+            this._icon.icon_name = 'audio-volume-muted-symbolic';
+        } else if (this._kind === 'app' && stream.get_gicon()) {
+            this._icon.gicon = stream.get_gicon();
+        } else {
+            this._icon.icon_name = LEVELS[Math.min(Math.floor(level * 3), 2)];
+        }
+    }
+});
+
 const VolumeButton = GObject.registerClass(
 class VolumeButton extends PanelMenu.Button {
     _init() {
@@ -54,6 +137,27 @@ class VolumeButton extends PanelMenu.Button {
         // Clicks are told apart in vfunc_button_press_event, not by the stock gesture (any click opens the menu).
         this._clickGesture?.set_enabled(false);
 
+        // The sliders pavucontrol has, for a quick change without its window: the output, the input and each app
+        // that plays something. Built as the menu opens, and again if the streams change while it is open.
+        this._control = getMixerControl();
+        this._sliders = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._sliders);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.box.add_style_class_name('volume-tray-menu');
+        this.menu.connect('open-state-changed', (_menu, open) => {
+            if (open)
+                this._rebuild();
+        });
+        const changed = () => {
+            if (this.menu.isOpen)
+                this._rebuild();
+        };
+        this._control.connectObject(
+            'default-sink-changed', changed,
+            'default-source-changed', changed,
+            'stream-added', changed,
+            'stream-removed', changed, this);
+
         this.menu.addAction('Volume Control', () => this._open());
         this.menu.addAction('Sound Settings', () => {
             Shell.AppSystem.get_default().lookup_app(SOUND_SETTINGS)?.activate();
@@ -65,6 +169,28 @@ class VolumeButton extends PanelMenu.Button {
         if (size <= 0)
             size = ICON_SIZE;
         this._icon.icon_size = size;
+    }
+
+    _rebuild() {
+        const control = this._control;
+        this._sliders.removeAll();
+        const sink = control.get_default_sink();
+        if (sink)
+            this._sliders.addMenuItem(new StreamItem(control, sink, 'output', sink.get_description() ?? 'Output'));
+        const source = control.get_default_source();
+        if (source)
+            this._sliders.addMenuItem(new StreamItem(control, source, 'input', source.get_description() ?? 'Input'));
+        // What plays now, without the shell's own event sounds.
+        const apps = control.get_sink_inputs().filter(stream =>
+            stream instanceof Gvc.MixerSinkInput && !stream.is_event_stream);
+        if (!apps.length)
+            return;
+        this._sliders.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Applications'));
+        for (const stream of apps) {
+            const name = stream.get_name() ?? 'Application';
+            const what = stream.get_description();
+            this._sliders.addMenuItem(new StreamItem(control, stream, 'app', what && what !== name ? `${name}: ${what}` : name));
+        }
     }
 
     _open() {
@@ -112,6 +238,7 @@ class VolumeButton extends PanelMenu.Button {
     _onDestroy() {
         this._traySettings?.disconnectObject(this);
         this._traySettings = null;
+        this._control.disconnectObject(this);
         super._onDestroy();
     }
 });
